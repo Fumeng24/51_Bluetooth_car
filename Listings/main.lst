@@ -1,0 +1,395 @@
+C51 COMPILER V9.60.7.0   MAIN                                                              12/01/2023 21:04:36 PAGE 1   
+
+
+C51 COMPILER V9.60.7.0, COMPILATION OF MODULE MAIN
+OBJECT MODULE PLACED IN .\Objects\main.obj
+COMPILER INVOKED BY: E:\Program Fiiles\keil\C51\BIN\C51.EXE main.c OPTIMIZE(8,SPEED) BROWSE DEBUG OBJECTEXTEND PRINT(.\L
+                    -istings\main.lst) OBJECT(.\Objects\main.obj)
+
+line level    source
+
+   1          #include <REGX52.H>
+   2          
+   3          sfr  P4=0xe8;//头文件未定义P4口，由于IO口损坏过多被迫启用P4口
+   4          sbit INT11=P1^1;
+   5          sbit INT2=P1^2;
+   6          sbit INT3=P1^3;
+   7          sbit INT4=P1^4;
+   8          sbit EN1=P1^0;
+   9          sbit EN2=P1^5;
+  10          sbit left_led1=P1^7;
+  11          sbit left_led2=P1^6;
+  12          sbit right_led1=P3^2;
+  13          sbit right_led2=P3^3;
+  14          sbit Echo=P3^7;
+  15          sbit Trig=P3^6;
+  16          bit  flag =0;
+  17          bit isBTControl=1;
+  18          #define left_motor_stops  EN1=0
+  19          #define right_motor_stops  EN2=0
+  20          #define left_motor_go  INT11=0,INT2=1
+  21          #define left_motor_back  INT11=1,INT2=0
+  22          #define right_motor_go  INT3=0,INT4=1
+  23          #define right_motor_back  INT3=1,INT4=0
+  24          
+  25          unsigned int  time=0;
+  26          unsigned char PWMR=0,PWML=0,t=0;
+  27          unsigned char SR04_Time1=0;
+  28          unsigned char SR04_Time2=0;
+  29          unsigned char receive_data;//接收到的数据
+  30          unsigned int EchoCnt;//超声波返回计时
+  31          int trackingMode = 0;//标志变量
+  32          
+  33          //延迟函数
+  34          void DelayUs(unsigned int i)
+  35          {
+  36   1              while(--i);
+  37   1      }
+  38          
+  39          //前进
+  40          void forward()
+  41          {
+  42   1              PWML=50;
+  43   1              PWMR=50;
+  44   1              left_motor_go; 
+  45   1              right_motor_go; 
+  46   1      }
+  47          
+  48          //后退
+  49          void backward()
+  50          {
+  51   1              PWML=50;
+  52   1              PWMR=50;
+  53   1              left_motor_back;
+  54   1              right_motor_back;
+C51 COMPILER V9.60.7.0   MAIN                                                              12/01/2023 21:04:36 PAGE 2   
+
+  55   1      }
+  56          
+  57          //左前方
+  58          void slow_forward_left()
+  59          {
+  60   1              PWMR=35;
+  61   1              left_motor_stops;
+  62   1              right_motor_go; 
+  63   1      }
+  64          
+  65          //右前方
+  66          void slow_forward_right()
+  67          {
+  68   1              PWML=35;
+  69   1              right_motor_stops;
+  70   1              left_motor_go;  
+  71   1      }
+  72          
+  73          //左后方
+  74          void slow_back_left()
+  75          {
+  76   1              PWMR=35;
+  77   1              right_motor_back;
+  78   1              left_motor_stops;  
+  79   1      }
+  80          
+  81          //右后方
+  82          void slow_back_right()
+  83          {
+  84   1              PWML=35;
+  85   1              left_motor_back;
+  86   1              right_motor_stops; 
+  87   1      }
+  88          
+  89          //原地左转
+  90          void fast_left()
+  91          {
+  92   1              PWMR=35;
+  93   1              left_motor_back;
+  94   1              PWML=35;
+  95   1              right_motor_go; 
+  96   1      }
+  97          
+  98          //原地右转
+  99          void fast_right()
+ 100          {
+ 101   1              PWMR=35;
+ 102   1              left_motor_go;
+ 103   1              PWML=35;
+ 104   1              right_motor_back; 
+ 105   1      }
+ 106          
+ 107          //停止
+ 108          void stop()
+ 109          {
+ 110   1              PWML=0;
+ 111   1              PWMR=0;
+ 112   1              left_motor_stops;
+ 113   1              right_motor_stops;
+ 114   1      }
+ 115          
+ 116          //定时器0-PWM
+C51 COMPILER V9.60.7.0   MAIN                                                              12/01/2023 21:04:36 PAGE 3   
+
+ 117          void Timer0_Init()
+ 118          {
+ 119   1              TMOD|=0X01;
+ 120   1              TH0=(65536-100)/256;
+ 121   1              TL0=(65536-100)%256;
+ 122   1              TR0=1;
+ 123   1              ET0=1;
+ 124   1              EA=1;
+ 125   1      }
+ 126          
+ 127          //定时器1-蓝牙
+ 128          void Timer1_Init()
+ 129          {
+ 130   1              TMOD &= 0x0F; // 清除定时器1模式位
+ 131   1              TMOD |= 0x20; // 设置定时器1为模式2（8位自动重载定时/计数器）
+ 132   1              TH1 = 0xFD;   // 定时器1初值，用于9600bps
+ 133   1              TL1 = 0xFD;   // 定时器1初值，用于9600bps
+ 134   1              TR1 = 1;      // 启动定时器1
+ 135   1              SCON = 0x50;  // 设置串行口为模式1（8位数据, 可变波特率）
+ 136   1      }
+ 137          
+ 138          //定时器2-超声波
+ 139          void HC04_Init(void)
+ 140          {
+ 141   1              T2MOD=0;                                //初始化模式寄存器
+ 142   1              T2CON=0;                                //初始化控制寄存器
+ 143   1              TH2=0;
+ 144   1              TL2=0;          
+ 145   1              ET2=0;                          //允许T2中断
+ 146   1              EA=1;                                   //开启总中断
+ 147   1      }
+ 148          
+ 149          //中断设置
+ 150          void Interrupt_Init()
+ 151          {
+ 152   1              EA = 1;       // 开启全局中断
+ 153   1              ES = 1;       // 开启串行中断
+ 154   1              PT1 = 1;      // 定时器1（串行中断）优先级高
+ 155   1              PT0 = 0;      // 定时器0优先级低
+ 156   1      }
+ 157          
+ 158          //蓝牙串口处理数据控制小车
+ 159          void Bluetooth_Control()
+ 160          {
+ 161   1              switch (receive_data)
+ 162   1              {
+ 163   2                      case '1':
+ 164   2                              forward(); break;
+ 165   2                      case '2':
+ 166   2                              backward(); break;
+ 167   2                      case '3':
+ 168   2                              fast_right(); break;
+ 169   2                      case '4':
+ 170   2                              fast_left(); break;
+ 171   2                      case '5':
+ 172   2                              slow_forward_left(); break;
+ 173   2                      case '6':
+ 174   2                              slow_forward_right(); break;
+ 175   2                      case '7':
+ 176   2                              slow_back_left(); break;
+ 177   2                      case '8':
+ 178   2                              slow_back_right(); break;
+C51 COMPILER V9.60.7.0   MAIN                                                              12/01/2023 21:04:36 PAGE 4   
+
+ 179   2                      case '0':
+ 180   2                              stop(); break;
+ 181   2              }
+ 182   1      }
+ 183          
+ 184          //超声波算法获取距离
+ 185          void HC04_Loop(void)
+ 186          {  
+ 187   1              Trig = 1;
+ 188   1              DelayUs(20);
+ 189   1              Trig = 0;
+ 190   1              while(!Echo);           //当RX（ECHO信号回响）为零时等待
+ 191   1              TR2=1;                  //开启计数
+ 192   1              while(Echo);            //当RX为1计数并等待
+ 193   1              TR2=0;                          //关闭计数
+ 194   1              time=TH2*256+TL2;
+ 195   1              TH2=0;
+ 196   1              TL2=0;
+ 197   1              EchoCnt=(float)(time*1.085)*0.17;     //单位是毫米
+ 198   1      }
+ 199          
+ 200          //循迹算法
+ 201          void xunji()
+ 202          {
+ 203   1              unsigned char jiaodu;
+ 204   1              if(left_led2==0&&left_led1==0&&right_led1==0&&right_led2==0)//0000
+ 205   1              {
+ 206   2                      switch(jiaodu)
+ 207   2                      {
+ 208   3                              case 0:forward();break;
+ 209   3                              case 1:fast_left();break;
+ 210   3                              case 2:fast_right();break;
+ 211   3                              default:forward();break;
+ 212   3                      }
+ 213   2              }
+ 214   1              if(left_led2==0&&left_led1==1&&right_led1==0&&right_led2==0)//0100
+ 215   1              {
+ 216   2                      slow_forward_left();
+ 217   2                      jiaodu=0;
+ 218   2              }
+ 219   1              if(left_led2==0&&left_led1==0&&right_led1==1&&right_led2==0)//0010
+ 220   1              { 
+ 221   2                      slow_forward_right();
+ 222   2                      jiaodu=0;
+ 223   2              }
+ 224   1              if(left_led2==1&&left_led1==0&&right_led1==0&&right_led2==0)//1000
+ 225   1              {
+ 226   2                      fast_left();
+ 227   2                      jiaodu=1;
+ 228   2              }
+ 229   1              if(left_led2==0&&left_led1==0&&right_led1==0&&right_led2==1)//0001
+ 230   1              {
+ 231   2                      fast_right();
+ 232   2                      jiaodu=2;
+ 233   2              }       
+ 234   1              if(left_led2==1&&left_led1==1&&right_led1==0&&right_led2==0)//1100
+ 235   1              {
+ 236   2                      fast_left();
+ 237   2                      jiaodu=1;
+ 238   2              }
+ 239   1              if(left_led2==0&&left_led1==0&&right_led1==1&&right_led2==1)//0011
+ 240   1              {
+C51 COMPILER V9.60.7.0   MAIN                                                              12/01/2023 21:04:36 PAGE 5   
+
+ 241   2                      fast_right();
+ 242   2                      jiaodu=2;
+ 243   2              }
+ 244   1              if(left_led2==1&&left_led1==1&&right_led1==1&&right_led2==1)//1111
+ 245   1              {
+ 246   2                      stop();
+ 247   2                      jiaodu=3;
+ 248   2              }
+ 249   1      }
+ 250          
+ 251          //超声波距离处理数据控制小车
+ 252          void HC04_Control()
+ 253          {
+ 254   1                      // 当物体距离大于等于上限时，物体前进
+ 255   1                      if (EchoCnt >= 200)
+ 256   1                      {
+ 257   2                              xunji();
+ 258   2                      }
+ 259   1                      // 当物体距离小于下限时，物体后退
+ 260   1                      else if (EchoCnt < 150)
+ 261   1                      {
+ 262   2                              backward();
+ 263   2                      }
+ 264   1                      // 当物体距离在范围内时，不进行任何操作
+ 265   1                      else
+ 266   1                      {
+ 267   2                              stop();
+ 268   2                      }
+ 269   1      }
+ 270          //主函数
+ 271          void main()
+ 272          {
+ 273   1              receive_data = 0;
+ 274   1              Timer0_Init();
+ 275   1              Timer1_Init();
+ 276   1              HC04_Init();
+ 277   1              Interrupt_Init();
+ 278   1              while(1)
+ 279   1              {       
+ 280   2                      if (trackingMode)
+ 281   2                      {
+ 282   3      //                      xunji();
+ 283   3                              HC04_Control();
+ 284   3                              isBTControl=0;
+ 285   3                      }
+ 286   2                      if (!trackingMode)
+ 287   2                      {
+ 288   3                              //如果不是循迹模式，则正常处理其他命令
+ 289   3                              Bluetooth_Control();
+ 290   3                              isBTControl=1;
+ 291   3                      }
+ 292   2              }
+ 293   1      }
+ 294          
+ 295          
+ 296          
+ 297          
+ 298          
+ 299          
+ 300          
+ 301          
+ 302          
+C51 COMPILER V9.60.7.0   MAIN                                                              12/01/2023 21:04:36 PAGE 6   
+
+ 303          
+ 304          
+ 305          //PWM信号产生服务程序
+ 306          void Timer0_interrupt()  interrupt 1
+ 307          {
+ 308   1              TH0=(65536-100)/256;
+ 309   1              TL0=(65536-100)%256;
+ 310   1              t++;
+ 311   1              if(t<PWML)
+ 312   1              EN1=1;
+ 313   1              else
+ 314   1                      EN1=0;
+ 315   1              if(t<PWMR)
+ 316   1                      EN2=1;
+ 317   1              else
+ 318   1                      EN2=0;
+ 319   1              if(t>=100)
+ 320   1              {
+ 321   2                      t=0;
+ 322   2              }
+ 323   1              if(isBTControl==0)
+ 324   1              {
+ 325   2                      SR04_Time1++;
+ 326   2                      if(SR04_Time1==255)
+ 327   2                      {
+ 328   3                              SR04_Time2++;
+ 329   3                              SR04_Time1=0;
+ 330   3                              if(SR04_Time2==10)
+ 331   3                              {
+ 332   4                                      HC04_Loop();
+ 333   4                                      SR04_Time2=0;                           
+ 334   4                              }
+ 335   3      
+ 336   3                      }
+ 337   2              }
+ 338   1      }
+ 339          
+ 340          //蓝牙串行中断服务程序
+ 341          void Serial_ISR(void) interrupt 4
+ 342          {
+ 343   1              if (RI)
+ 344   1              {
+ 345   2                      RI = 0;//清除接收中断标志
+ 346   2                      receive_data = SBUF;
+ 347   2                      if (receive_data == '9')
+ 348   2                      {
+ 349   3                              trackingMode = !trackingMode;//切换模式
+ 350   3                      }
+ 351   2              }
+ 352   1              if (TI)
+ 353   1              {
+ 354   2                      TI = 0;//清除发送中断标志
+ 355   2              }
+ 356   1      }
+ 357          
+ 358          
+ 359          
+
+
+MODULE INFORMATION:   STATIC OVERLAYABLE
+   CODE SIZE        =    725    ----
+   CONSTANT SIZE    =   ----    ----
+C51 COMPILER V9.60.7.0   MAIN                                                              12/01/2023 21:04:36 PAGE 7   
+
+   XDATA SIZE       =   ----    ----
+   PDATA SIZE       =   ----    ----
+   DATA SIZE        =     12    ----
+   IDATA SIZE       =   ----    ----
+   BIT SIZE         =      2    ----
+END OF MODULE INFORMATION.
+
+
+C51 COMPILATION COMPLETE.  0 WARNING(S),  0 ERROR(S)
